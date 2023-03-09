@@ -61,35 +61,63 @@ def get_action(a_prob, m_prob):
     
     return real_action, a, m, need_m, prob, prob_selected_a, prob_selected_m
 
-def actor(actor_num, center_div_model, center_model, data_queue, signal_queue, summary_queue, arg_dict):
+def actor(actor_num, div_model, center_model, data_queue, signal_queue, summary_queue, arg_dict):
     os.environ['OPENBLAS_NUM_THREADS'] = '1'
     print("Actor process {} started".format(actor_num))
+    cpu_device = torch.device('cpu')
     fe_module = importlib.import_module("encoders." + arg_dict["encoder"])
     rewarder = importlib.import_module("rewarders." + arg_dict["rewarder"])
     imported_model = importlib.import_module("models." + arg_dict["model"])
+    imported_div_model = importlib.import_module("models." + arg_dict["div_model"])
     
     fe = fe_module.FeatureEncoder()
+    state_to_tensor = fe_module.state_to_tensor
+    
     model = imported_model.Model(arg_dict)
     model.load_state_dict(center_model.state_dict())
-    
-    env = football_env.create_environment(env_name=arg_dict["env"], representation="raw", stacked=False, logdir='/tmp/football', \
+
+    model_div = imported_div_model.Model(arg_dict)
+    model_div.load_state_dict(div_model.state_dict())
+
+    env = football_env.create_environment(env_name=arg_dict['env'], representation="raw", stacked=False, logdir=arg_dict["log_dir_dump_left"], \
+                                          number_of_left_players_agent_controls=1,
+                                          number_of_right_players_agent_controls=0,
                                           write_goal_dumps=False, write_full_episode_dumps=False, render=False)
     n_epi = 0
     rollout = []
+    
     while True: # episode loop
-        env.reset()   
+        obs = env.reset()   
+
         done = False
-        steps, score, tot_reward, win = 0, 0, 0, 0
+        steps, score, tot_reward, win= 0, 0, 0, 0
         n_epi += 1
         h_out = (torch.zeros([1, 1, arg_dict["lstm_size"]], dtype=torch.float), 
-                 torch.zeros([1, 1, arg_dict["lstm_size"]], dtype=torch.float))
-        
+                torch.zeros([1, 1, arg_dict["lstm_size"]], dtype=torch.float))
+        h_div_out = (torch.zeros([1, 1, arg_dict["div_lstm_size"]], dtype=torch.float), 
+                 torch.zeros([1, 1, arg_dict["div_lstm_size"]], dtype=torch.float)) 
+
+        skill = torch.zeros([1,1,arg_dict["div_num"]], dtype=torch.float)
+        skill_ = torch.zeros([1,1,arg_dict["div_num"]], dtype=torch.float)
+        skill_def = torch.zeros([1,1,arg_dict["div_num"]], dtype=torch.float)
+        skill_def[:,:,0] = 1.0
+        skill_num_ = random.randint(1, arg_dict["div_num"]-1)
+        #skill_num_ = random.choices([1,2,3], [2,2,6])[0]
+        skill[:,:,skill_num_] = 1.0
+        skill_acc, skill_steps = 0.0, 0.0
+
+        z_most_idx = skill_num_
+
         loop_t, forward_t, wait_t = 0.0, 0.0, 0.0
-        obs = env.observation()
-        
-        while not done:  # step loop
+        ball_owned_team = obs[0]["ball_owned_team"] #-1
+        left_owned_ball = False
+
+        prev_obs = [None]
+
+        while not done:
+
             init_t = time.time()
-            
+
             is_stopped = False
             while signal_queue.qsize() > 0:
                 time.sleep(0.02)
@@ -97,44 +125,79 @@ def actor(actor_num, center_div_model, center_model, data_queue, signal_queue, s
             if is_stopped:
                 model.load_state_dict(center_model.state_dict())
             wait_t += time.time() - init_t
-            
+
             h_in = h_out
+            h_div_in = h_div_out
             state_dict = fe.encode(obs[0])
-            state_dict_tensor = state_to_tensor(state_dict, h_in)
-            
+            state_dict_tensor = state_to_tensor(state_dict, h_in, skill_, h_div_in)
+
             t1 = time.time()
             with torch.no_grad():
-                a_prob, m_prob, _, h_out = model(state_dict_tensor)
-            forward_t += time.time()-t1 
-            real_action, a, m, need_m, prob, prob_selected_a, prob_selected_m = get_action(a_prob, m_prob)
+                a_prob, m_prob, _, h_out, _, _ = model(state_dict_tensor)
 
-            prev_obs = obs
-            obs, rew, done, info = env.step(real_action)
-            fin_r = rewarder.calc_reward(rew, prev_obs[0], obs[0])
-            state_prime_dict = fe.encode(obs[0])
+            forward_t += time.time()-t1 
+            real_action, a, m, need_m, prob, _, _ = get_action(a_prob, m_prob)
+
+            if ball_owned_team != -1:
+                prev_obs = obs
+
+            obs, rew, done, info = env.skill_step(real_action, {})
+
+            ball_owned_team = obs[0]["ball_owned_team"]
+            if ball_owned_team == 0:
+                left_owned_ball = True
+            elif ball_owned_team == 1:
+                left_owned_ball = False
+
+            if not left_owned_ball:
+                skill_ = skill_def
+                skill_num = 0
+            else:
+                skill_ = skill
+                skill_num = skill_num_
             
-            (h1_in, h2_in) = h_in
+            state_prime_dict = fe.encode(obs[0])
+            state_prime_dict_tensor = state_to_tensor(state_prime_dict, h_in, skill_, h_div_in)
+
+
+            with torch.no_grad():
+                prob_z, h_div_out = model_div(state_prime_dict_tensor)
+                z_most_idx = find_most_z_idx(prob_z)
+
+            fin_r = rewarder.calc_reward(rew[0], prev_obs[0], obs[0], float(prob_z[skill_num])*(arg_dict["div_num"]), None, left_owned_ball)
+
             (h1_out, h2_out) = h_out
+            (h1_in, h2_in) = h_in
+            (h1_div_in, h2_div_in) = h_div_in
             state_dict["hidden"] = (h1_in.numpy(), h2_in.numpy())
             state_prime_dict["hidden"] = (h1_out.numpy(), h2_out.numpy())
-            transition = (state_dict, a, m, fin_r, state_prime_dict, prob, done, need_m)
+            state_prime_dict["hidden_div"] = (h1_div_in.numpy(), h2_div_in.numpy())
+            state_dict["skill"] = skill_.numpy()
+            state_prime_dict["skill"] = skill_.numpy()
+
+            transition = (state_dict, a, m, fin_r, state_prime_dict, prob, prob_z.numpy(), done, need_m)
+
             rollout.append(transition)
             if len(rollout) == arg_dict["rollout_len"]:
                 data_queue.put(rollout)
                 rollout = []
                 model.load_state_dict(center_model.state_dict())
+                
+            skill_steps += 1
+            if z_most_idx == skill_num:
+                skill_acc += 1
 
             steps += 1
-            score += rew
+            score += rew[0]
             tot_reward += fin_r
-          
+
             loop_t += time.time()-init_t
-            
+
             if done:
                 if score > 0:
                     win = 1
-                print("score",score,"total reward",tot_reward)
-                summary_data = (win, score, tot_reward, steps, 0, loop_t/steps, forward_t/steps, wait_t/steps)
+                print("Model score",score,"total reward",tot_reward, "skill", skill_num_)
+                summary_data = (win, score, tot_reward, steps, None, loop_t/steps, forward_t/steps, wait_t/steps, skill_acc/skill_steps)
                 summary_queue.put(summary_data)
 
 def select_opponent(arg_dict):
@@ -157,8 +220,10 @@ def select_opponent(arg_dict):
         opp_model_num = random.randint(0,len(model_num_lst)-1)
         
     model_name = "/model_"+str(model_num_lst[opp_model_num])+".tar"
+    div_model_name = "/div_model_"+str(model_num_lst[opp_model_num])+".tar"
     opp_model_path = arg_dict["log_dir_policy"] + model_name
-    return opp_model_num, opp_model_path
+    opp_model_div_path = arg_dict["log_dir_div"] + div_model_name
+    return opp_model_num, opp_model_path, opp_model_div_path
                 
                 
 def actor_self(actor_num, div_model, center_model, data_queue, signal_queue, summary_queue, arg_dict):
@@ -180,7 +245,8 @@ def actor_self(actor_num, div_model, center_model, data_queue, signal_queue, sum
     model_div.load_state_dict(div_model.state_dict())
 
     opp_model = imported_model.Model(arg_dict)
-    opp_model.load_state_dict(center_model.state_dict())
+
+    opp_model_div = imported_div_model.Model(arg_dict)
 
     env = football_env.create_environment(env_name=arg_dict['env'], representation="raw", stacked=False, logdir=arg_dict["log_dir_dump_left"], \
                                           number_of_left_players_agent_controls=1,
@@ -190,13 +256,15 @@ def actor_self(actor_num, div_model, center_model, data_queue, signal_queue, sum
     rollout = []
     
     while True: # episode loop
-        opp_model_num, opp_model_path = select_opponent(arg_dict)
+        opp_model_num, opp_model_path, opp_model_div_path = select_opponent(arg_dict)
 
         checkpoint = torch.load(opp_model_path, map_location=cpu_device)
         opp_model.load_state_dict(checkpoint['model_state_dict'])
-        #print("Current Opponent attack model Num:{}, Path:{} successfully loaded".format(opp_att_model_num, opp_att_model_path))
-        #print("Current Opponent defence model Num:{}, Path:{} successfully loaded".format(opp_def_model_num, opp_def_model_path))
+
+        #div_checkpoint = torch.load(opp_model_div_path, map_location=cpu_device)
+        #opp_model_div.load_state_dict(div_checkpoint['model_state_dict'])
         del checkpoint
+        #del div_checkpoint
 
         [obs, opp_obs] = env.reset()   
 
@@ -212,19 +280,27 @@ def actor_self(actor_num, div_model, center_model, data_queue, signal_queue, sum
         opp_h_div_out = (torch.zeros([1, 1, arg_dict["div_lstm_size"]], dtype=torch.float), 
                      torch.zeros([1, 1, arg_dict["div_lstm_size"]], dtype=torch.float))
 
-        skill = torch.zeros([1,1, arg_dict["div_num"]], dtype=torch.float)
-        skill_num = random.randint(0, arg_dict["div_num"]-1)
-        skill[:,:,skill_num] = 1.0
+        skill = torch.zeros([1,1,5], dtype=torch.float)
+        skill_ = torch.zeros([1,1,5], dtype=torch.float)
+        skill_def = torch.zeros([1,1,5], dtype=torch.float)
+        skill_def[:,:,0] = 1.0
+        skill_num_ = random.randint(1, arg_dict["div_num"]-1)
+        #skill_num_ = random.choices([1,2,3], [2,2,6])[0]
+        skill[:,:,skill_num_] = 1.0
         skill_acc, skill_steps = 0.0, 0.0
         active_num = obs["active"]
 
-        opp_skill = torch.zeros([1,1, arg_dict["div_num"]], dtype=torch.float)
-        opp_skill_num = random.randint(0, arg_dict["div_num"]-1)
+        z_most_idx = skill_num_
+
+        opp_skill = torch.zeros([1,1,5], dtype=torch.float)
+        opp_skill_num = random.randint(1, arg_dict["div_num"]-1)
         opp_skill[:,:,opp_skill_num] = 1.0
-        opp_num = opp_obs["active"]
         
         loop_t, forward_t, wait_t = 0.0, 0.0, 0.0
         ball_owned_team = obs["ball_owned_team"] #-1
+        left_owned_ball = False
+
+        prev_obs = []
 
         while not done:
 
@@ -243,7 +319,7 @@ def actor_self(actor_num, div_model, center_model, data_queue, signal_queue, sum
             opp_h_in = opp_h_out
             opp_h_div_in = opp_h_div_out
             state_dict = fe.encode(obs)
-            state_dict_tensor = state_to_tensor(state_dict, h_in, skill, h_div_in)
+            state_dict_tensor = state_to_tensor(state_dict, h_in, skill_, h_div_in)
             opp_state_dict = fe.encode(opp_obs)
             opp_state_dict_tensor = state_to_tensor(opp_state_dict, opp_h_in, opp_skill, opp_h_div_in)
 
@@ -255,16 +331,35 @@ def actor_self(actor_num, div_model, center_model, data_queue, signal_queue, sum
             real_action, a, m, need_m, prob, _, _ = get_action(a_prob, m_prob)
             opp_real_action, _, _, _, _, _, _ = get_action(opp_a_prob, opp_m_prob)
 
-            prev_obs = obs
+            if ball_owned_team != -1:
+                prev_obs = obs
 
-            [obs, opp_obs], [rew, _], done, info = env.step([real_action, opp_real_action])
+            [obs, opp_obs], [rew, _], done, info = env.skill_step([real_action, opp_real_action], {})
 
             ball_owned_team = obs["ball_owned_team"]
+            if ball_owned_team == 0:
+                left_owned_ball = True
+            elif ball_owned_team == 1:
+                left_owned_ball = False
+
+            if not left_owned_ball:
+                skill_ = skill_def
+                skill_num = 0
+                #skill_num = z_most_idx
+                #skill = torch.zeros([1,1, arg_dict["div_num"]], dtype=torch.float)
+                #skill[:,:,skill_num] = 1.0
+            else:
+                skill_ = skill
+                skill_num = skill_num_
+            
             active_num = obs["active"]
             opp_num = opp_obs["active"]
 
             state_prime_dict = fe.encode(obs)
-            state_prime_dict_tensor = state_to_tensor(state_prime_dict, h_in, skill, h_div_in)
+            state_prime_dict_tensor = state_to_tensor(state_prime_dict, h_in, skill_, h_div_in)
+
+            opp_state_prime_dict = fe.encode(opp_obs)
+            opp_state_prime_dict_tensor = state_to_tensor(opp_state_prime_dict, opp_h_in, skill_, opp_h_div_in)
             #state_dict_tensor["player_div_prime"] = state_prime_dict_tensor["player_div"]
             #state_dict_tensor["opp_div_prime"] = state_prime_dict_tensor["opp_div"]
             #state_dict_tensor["ball_prime"] = state_prime_dict_tensor["ball"]
@@ -273,19 +368,27 @@ def actor_self(actor_num, div_model, center_model, data_queue, signal_queue, sum
                 prob_z, h_div_out = model_div(state_prime_dict_tensor)
                 z_most_idx = find_most_z_idx(prob_z)
 
-            if ball_owned_team == 0:
-                fin_r = rewarder.calc_reward(rew, prev_obs, obs, float(prob_z[skill_num])*(arg_dict["div_num"]))
-            else:
-                fin_r = rewarder.calc_reward(rew, prev_obs, obs, None)
+                #opp_prob_z, opp_h_div_out = opp_model_div(opp_state_prime_dict_tensor)
 
-            (h1_in, h2_in) = h_in
+                #opp_z_most_idx = find_most_z_idx(opp_prob_z)
+
+            fin_r = rewarder.calc_reward(rew, prev_obs, obs, float(prob_z[skill_num])*(arg_dict["div_num"]), opp_num, left_owned_ball)
+
+            #fin_r = rewarder.calc_reward(rew, prev_obs, obs, float(prob_z[skill_num] / opp_prob_z[opp_skill_num]), opp_num, left_owned_ball)
+
             (h1_out, h2_out) = h_out
+            (h1_in, h2_in) = h_in
             (h1_div_in, h2_div_in) = h_div_in
+            #(opp_h1_div_in, opp_h2_div_in) = opp_h_div_in
             state_dict["hidden"] = (h1_in.numpy(), h2_in.numpy())
             state_prime_dict["hidden"] = (h1_out.numpy(), h2_out.numpy())
             state_prime_dict["hidden_div"] = (h1_div_in.numpy(), h2_div_in.numpy())
-            state_dict["skill"] = skill.numpy()
-            state_prime_dict["skill"] = skill.numpy()
+            #opp_state_prime_dict["hidden_div"] = (opp_h1_div_in.numpy(), opp_h2_div_in.numpy())
+            state_dict["skill"] = skill_.numpy()
+            state_prime_dict["skill"] = skill_.numpy()
+
+
+            #opp_state_prime_dict["skill"] = opp_skill.numpy()
 
             transition = (state_dict, a, m, fin_r, state_prime_dict, prob, prob_z.numpy(), done, need_m)
 
@@ -295,10 +398,10 @@ def actor_self(actor_num, div_model, center_model, data_queue, signal_queue, sum
                 rollout = []
                 model.load_state_dict(center_model.state_dict())
                 
-            if z_most_idx == skill_num and ball_owned_team == 0:
+            #if left_owned_ball:
+            skill_steps += 1
+            if z_most_idx == skill_num:
                 skill_acc += 1
-            if ball_owned_team == 0:
-                skill_steps += 1
 
             steps += 1
             score += rew
@@ -309,7 +412,7 @@ def actor_self(actor_num, div_model, center_model, data_queue, signal_queue, sum
             if done:
                 if score > 0:
                     win = 1
-                print("Model score",score,"total reward",tot_reward, "opp_num", opp_model_num, "skill", skill_num)
+                print("Model score",score,"total reward",tot_reward, "opp_num", opp_model_num, "skill", skill_num_)
                 summary_data = (win, score, tot_reward, steps, str(opp_model_num), loop_t/steps, forward_t/steps, wait_t/steps, skill_acc/skill_steps)
                 summary_queue.put(summary_data)
              
@@ -433,7 +536,6 @@ def seperate_actor(actor_num, center_model, data_queue, signal_queue, summary_qu
                     summary_data = (win, score, tot_reward, steps, 0, loop_t/steps, forward_t/steps, wait_t/steps)
                     summary_queue.put(summary_data)
 
-             
             #defence model
             while not done:  # step loop
                 init_t = time.time()

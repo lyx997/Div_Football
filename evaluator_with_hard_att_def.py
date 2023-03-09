@@ -26,6 +26,28 @@ def split_att_idx(all_sorted_idx):
     
     return team_att_idx_list, opp_att_idx_list
 
+def get_max_prob_action(a_prob, m_prob):
+    a = int(a_prob[0].sort(descending=True)[1][0][0])
+    m, need_m = 0, 0
+    prob_selected_a = a_prob[0][0][a].item()
+    prob_selected_m = 0
+    if a==0:
+        real_action = a
+        prob = prob_selected_a
+    elif a==1:
+        m = int(m_prob[0].sort(descending=True)[1][0][0])
+        need_m = 1
+        real_action = m + 1
+        prob_selected_m = m_prob[0][0][m].item()
+        prob = prob_selected_a* prob_selected_m
+    else:
+        real_action = a + 7
+        prob = prob_selected_a
+
+    assert prob != 0, 'prob 0 ERROR!!!! a : {}, m:{}  {}, {}'.format(a,m,prob_selected_a,prob_selected_m)
+    
+    return real_action, a, m, need_m, prob, prob_selected_a, prob_selected_m
+
 def get_action(a_prob, m_prob):
     a = Categorical(a_prob).sample().item()
     m, need_m = 0, 0
@@ -221,7 +243,7 @@ def seperate_evaluator(center_model, signal_queue, summary_queue, arg_dict):
                     summary_data = (win, score, tot_reward, steps, arg_dict['env_evaluation'], loop_t/steps, forward_t/steps, wait_t/steps)
                     summary_queue.put(summary_data)
 
-def test(center_model, div_idx, arg_dict):
+def test(div_model, center_model, div_idx, arg_dict):
     print("Test skill:", div_idx, "process started")
     fe_module1 = importlib.import_module("encoders." + arg_dict["encoder"])
     
@@ -245,28 +267,52 @@ def test(center_model, div_idx, arg_dict):
         h_div_out = (torch.zeros([1, 1, arg_dict["div_lstm_size"]], dtype=torch.float), 
                  torch.zeros([1, 1, arg_dict["div_lstm_size"]], dtype=torch.float))
         
-        skill = torch.zeros([1,1, arg_dict["div_num"]], dtype=torch.float)
-        skill[:,:,div_idx] = 1.0
+        skill = torch.zeros([1,1,5], dtype=torch.float)
+        skill_num = div_idx
+        skill[:,:,skill_num] = 1.0
+        prob_z = skill.squeeze()
 
         loop_t, forward_t, wait_t = 0.0, 0.0, 0.0
 
         obs = env_left.reset()
 
+        ball_owned_team = obs[0]["ball_owned_team"] #-1
+        left_owned_ball = False
 
         while not done:  # step loop
             
             h_in = h_out
             h_div_in = h_div_out
-            state_dict = fe1.encode(obs[0], 0)
+            state_dict = fe1.encode(obs[0])
             state_dict_tensor = state_to_tensor1(state_dict, h_in, skill, h_div_in)
             
             with torch.no_grad():
                 a_prob, m_prob, _, h_out, _, _ = model(state_dict_tensor)
+                #a_prob, m_prob, _, h_out = model(state_dict_tensor)
 
-            real_action, a, m, need_m, prob, prob_selected_a, prob_selected_m = get_action(a_prob, m_prob)
+            #real_action, a, m, need_m, prob, prob_selected_a, prob_selected_m = get_action(a_prob, m_prob)
+            real_action, a, m, need_m, prob, prob_selected_a, prob_selected_m = get_max_prob_action(a_prob, m_prob)
 
             prev_obs = obs
-            obs, rew, done, info = env_left.step([real_action])
+            obs, rew, done, info = env_left.skill_step([real_action], {skill_num : float(prob_z[skill_num])})
+
+            ball_owned_team = obs[0]["ball_owned_team"]
+            if ball_owned_team == 0:
+                left_owned_ball = True
+            elif ball_owned_team == 1:
+                left_owned_ball = False
+
+            state_prime_dict = fe1.encode(obs[0])
+            state_prime_dict_tensor = state_to_tensor1(state_prime_dict, h_in, skill, h_div_in)
+
+            with torch.no_grad():
+                prob_z, h_div_out = div_model(state_prime_dict_tensor)
+                z_most_idx = find_most_z_idx(prob_z)
+            #print("steps:", steps, "skill_num", skill_num, "prob", float(prob_z[skill_num]))
+
+            #skill_num = z_most_idx
+            #skill = torch.zeros([1,1,5], dtype=torch.float)
+            #skill[:,:,skill_num] = 1.0
 
             steps += 1
             score += rew
@@ -275,7 +321,7 @@ def test(center_model, div_idx, arg_dict):
                 print("Model evaluate with ", arg_dict["env_evaluation"]," model: score",score, "skill", div_idx)
 
 
-def evaluator(div_model, center_model, signal_queue, summary_queue, arg_dict):
+def evaluator(div_idx, center_div_model, center_model, signal_queue, summary_queue, arg_dict):
     print("Evaluator process started")
     fe_module1 = importlib.import_module("encoders." + arg_dict["encoder"])
     #fe_module2 = importlib.import_module("encoders." + "encoder_basic")
@@ -287,6 +333,7 @@ def evaluator(div_model, center_model, signal_queue, summary_queue, arg_dict):
     #fe2 = fe_module2.FeatureEncoder()
     #state_to_tensor2 = fe_module2.state_to_tensor
     model = center_model
+    div_model = center_div_model
     #opp_model = opp_import_model.Model(arg_dict)
     #opp_model_checkpoint = torch.load(arg_dict["env_evaluation"])
     #opp_model.load_state_dict(opp_model_checkpoint['model_state_dict'])
@@ -316,8 +363,8 @@ def evaluator(div_model, center_model, signal_queue, summary_queue, arg_dict):
         h_div_out = (torch.zeros([1, 1, arg_dict["div_lstm_size"]], dtype=torch.float), 
                  torch.zeros([1, 1, arg_dict["div_lstm_size"]], dtype=torch.float))
         
-        skill = torch.zeros([1,1, arg_dict["div_num"]], dtype=torch.float)
-        skill_num = random.randint(0, arg_dict["div_num"]-1)
+        skill = torch.zeros([1,1,5], dtype=torch.float)
+        skill_num = div_idx
         skill[:,:,skill_num] = 1.0
         skill_acc, skill_steps = 0.0, 0.0
 
@@ -326,6 +373,7 @@ def evaluator(div_model, center_model, signal_queue, summary_queue, arg_dict):
         obs = env_left.reset()
 
         ball_owned_team = obs[0]["ball_owned_team"] #-1
+        left_owned_ball = False
 
         while not done:  # step loop
             
@@ -349,12 +397,19 @@ def evaluator(div_model, center_model, signal_queue, summary_queue, arg_dict):
                 a_prob, m_prob, _, h_out, _, _ = model(state_dict_tensor)
             forward_t += time.time()-t1 
 
-            real_action, a, m, need_m, prob, prob_selected_a, prob_selected_m = get_action(a_prob, m_prob)
+            #real_action, a, m, need_m, prob, prob_selected_a, prob_selected_m = get_action(a_prob, m_prob)
+            real_action, a, m, need_m, prob, prob_selected_a, prob_selected_m = get_max_prob_action(a_prob, m_prob)
 
             prev_obs = obs
-            obs, rew, done, info = env_left.step([real_action])
-            ball_owned_team = obs[0]["ball_owned_team"]
+            obs, rew, done, info = env_left.skill_step([real_action], {})
 
+            ball_owned_team = obs[0]["ball_owned_team"]
+            if ball_owned_team == 0:
+                left_owned_ball = True
+            elif ball_owned_team == 1:
+                left_owned_ball = False
+
+            
 
             state_prime_dict = fe1.encode(obs[0])
             state_prime_dict_tensor = state_to_tensor1(state_prime_dict, h_in, skill, h_div_in)
@@ -366,19 +421,12 @@ def evaluator(div_model, center_model, signal_queue, summary_queue, arg_dict):
                 prob_z, h_div_out = div_model(state_prime_dict_tensor)
                 z_most_idx = find_most_z_idx(prob_z)
                 
-            if ball_owned_team == 0:
-                fin_r = rewarder.calc_reward(rew, prev_obs[0], obs[0], float(prob_z[skill_num])*(arg_dict["div_num"]))
-            else:
-                fin_r = rewarder.calc_reward(rew, prev_obs[0], obs[0], None)
-            
-            (h1_in, h2_in) = h_in
-            (h1_out, h2_out) = h_out
-            (h1_div_in, h2_div_in) = h_in
-            state_dict["hidden"] = (h1_in.numpy(), h2_in.numpy())
-            state_prime_dict["hidden_div"] = (h1_div_in.numpy(), h2_div_in.numpy())
-            state_prime_dict["hidden"] = (h1_out.numpy(), h2_out.numpy())
-            transition = (state_dict, a, m, fin_r, state_prime_dict, prob, done, need_m)
+            fin_r = rewarder.calc_reward(rew, prev_obs[0], obs[0], float(prob_z[skill_num])*(arg_dict["div_num"]), None, left_owned_ball)
 
+            #skill_num = z_most_idx
+            #skill = torch.zeros([1,1,5], dtype=torch.float)
+            #skill[:,:,skill_num] = 1.0
+            
             if z_most_idx == skill_num:
                 skill_acc += 1
             skill_steps += 1

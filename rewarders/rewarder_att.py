@@ -1,7 +1,7 @@
 import numpy as np
 import math
 
-def calc_reward(rew, prev_obs, obs, skill_reward):
+def calc_reward(rew, prev_obs, obs, skill_reward, opp_num, left_owned_ball):
     ball_x, ball_y, ball_z = obs['ball']
     MIDDLE_X, PENALTY_X, END_X = 0.2, 0.64, 1.0
     PENALTY_Y, END_Y = 0.27, 0.42
@@ -38,19 +38,13 @@ def calc_reward(rew, prev_obs, obs, skill_reward):
     active_tired = obs['left_team_tired_factor'][active]
     tired_reward = 0
     not_owned_ball_reward = 0
-    
-    #if prev_most_att_idx:
-    #    if active in prev_most_att_idx and highpass:
-    #       #att_high_pass_counts = 1
-    #       #attention_reward = float(np.exp(prev_most_att))
-    #       attention_reward = 1
+    skill_div_reward = 0.0
 
     if prev_obs:
 
         yellow_r = np.sum(prev_obs["left_team_yellow_card"]) - np.sum(obs["left_team_yellow_card"]) 
         #right_yellow = np.sum(obs["right_team_yellow_card"]) -  np.sum(prev_obs["right_team_yellow_card"])
         #yellow_r = right_yellow - left_yellow
-
         prev_active = prev_obs['active']
         prev_active_tired = prev_obs['left_team_tired_factor'][prev_active]
 
@@ -77,10 +71,20 @@ def calc_reward(rew, prev_obs, obs, skill_reward):
             good_pass_counts = 1
             change_ball_owned_reward = 1.0
 
-        skill_div_reward = 0.0
-        if skill_reward:
+        if not left_owned_ball:
+            active_dis_to_ball = np.linalg.norm(np.array(obs['left_team'][active] - obs['right_team'][opp_num]), axis=0, keepdims=True)
+            if active_dis_to_ball <= 0.03:
+                not_owned_ball_reward = 0
+            elif active_dis_to_ball > 0.03 and active_dis_to_ball <= 0.06:
+                not_owned_ball_reward = -1
+            elif active_dis_to_ball > 0.06 and active_dis_to_ball <= 0.1:
+                not_owned_ball_reward = -2
+            elif active_dis_to_ball > 0.1:
+                not_owned_ball_reward = -3
+
+        elif skill_reward:
             skill_div_reward = np.log(skill_reward)
 
-    reward = 5.0*win_reward + 5.0*rew + 0.1*yellow_r + 0.001*ball_position_r + 0.01*change_ball_owned_reward + 0.01*skill_div_reward
+    reward = 5.0*win_reward + 5.0*rew + 0.01*yellow_r + 0.001*ball_position_r + 0.05*skill_div_reward + 0.01*not_owned_ball_reward + 0.1*change_ball_owned_reward
         
     return reward

@@ -10,7 +10,7 @@ import torch.multiprocessing as mp
 from tensorboardX import SummaryWriter
 
 def write_summary(writer, arg_dict, summary_queue, n_game, loss_lst, pi_loss_lst, v_loss_lst, \
-                  entropy_lst, move_entropy_lst, optimization_step, self_play_board, win_evaluation, score_evaluation, div_loss_lst, div_entropy_lst, model, last_saved_step):
+                  entropy_lst, move_entropy_lst, optimization_step, self_play_board, win_evaluation, score_evaluation, div_loss_lst, div_entropy_lst, model, div_model, last_saved_step):
     win, score, tot_reward, game_len, div_acc = [], [], [], [], []
     loop_t, forward_t, wait_t = [], [], []
 
@@ -51,7 +51,7 @@ def write_summary(writer, arg_dict, summary_queue, n_game, loss_lst, pi_loss_lst
     writer.add_scalar('train/entropy', np.mean(entropy_lst), n_game)
     writer.add_scalar('train/move_entropy', np.mean(move_entropy_lst), n_game)
 
-    if float(np.mean(win)) >= 0.8:
+    if float(np.mean(win)) >= arg_dict["saved_win_rate"]:
         if optimization_step >= last_saved_step + arg_dict["model_save_min_interval"]:
             model_dict = {
                 'optimization_step': optimization_step,
@@ -63,14 +63,45 @@ def write_summary(writer, arg_dict, summary_queue, n_game, loss_lst, pi_loss_lst
             print("Model saved :", path, "WinRate:", float(np.mean(win)))
             last_saved_step = optimization_step
 
+            div_model_dict = {
+                'optimization_step': optimization_step,
+                'model_state_dict': div_model.state_dict(),
+                'optimizer_state_dict': div_model.optimizer.state_dict(),
+            }
+            div_path = arg_dict["log_dir_div"]+"/div_model_"+str(optimization_step)+".tar"
+            torch.save(div_model_dict, div_path)
+            print("Div Model saved :", div_path)
+
     if len(div_loss_lst) > 0:
         writer.add_scalar('train/div_loss', np.mean(div_loss_lst), n_game)
         writer.add_scalar('train/div_entropy', np.mean(div_entropy_lst), n_game)
 
-    mini_window = int(arg_dict['summary_game_window']//3)
+    mini_window = int(arg_dict['summary_game_window']//4)
     if len(win_evaluation)>=mini_window:
         writer.add_scalar('game/win_rate_evaluation', float(np.mean(win_evaluation)), n_game)
         writer.add_scalar('game/score_evaluation', float(np.mean(score_evaluation)), n_game)
+
+        if float(np.mean(win_evaluation)) >= arg_dict["saved_eval_win_rate"]:
+            if optimization_step >= last_saved_step + arg_dict["model_save_min_interval"]:
+                model_dict = {
+                    'optimization_step': optimization_step,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': model.optimizer.state_dict(),
+                }
+                path = arg_dict["log_dir_policy"]+"/model_"+str(optimization_step)+".tar"
+                torch.save(model_dict, path)
+                print("Model saved :", path, "WinRate:", float(np.mean(win)))
+                last_saved_step = optimization_step
+
+                div_model_dict = {
+                    'optimization_step': optimization_step,
+                    'model_state_dict': div_model.state_dict(),
+                    'optimizer_state_dict': div_model.optimizer.state_dict(),
+                }
+                div_path = arg_dict["log_dir_div"]+"/div_model_"+str(optimization_step)+".tar"
+                torch.save(div_model_dict, div_path)
+                print("Div Model saved :", div_path)
+
         win_evaluation, score_evaluation = [], []
 
     for opp_num in self_play_board:
@@ -152,10 +183,10 @@ def get_data(queue, arg_dict, model, tot_data):
         if tot_data and data_size < arg_dict["div_buffer_size"]:
             for key, _ in latest_data.items():
                 if key == "player_div" or key == "ball" or key == "skill":
-                    tot_data[key] = torch.cat([tot_data[key], latest_data[key].reshape(1, latest_data_size, -1)], dim=1)
+                    tot_data[key] = torch.cat([tot_data[key], latest_data[key].reshape(1, -1, latest_data[key].shape[-1])], dim=1)
                 elif key == "hidden_div":
-                    hidden1 = torch.cat([tot_data[key][0], latest_data[key][0].reshape(1, latest_data_size, -1)], dim=1)
-                    hidden2 = torch.cat([tot_data[key][1], latest_data[key][1].reshape(1, latest_data_size, -1)], dim=1)
+                    hidden1 = torch.cat([tot_data[key][0], latest_data[key][0].reshape(1, -1, latest_data[key][0].shape[-1])], dim=1)
+                    hidden2 = torch.cat([tot_data[key][1], latest_data[key][1].reshape(1, -1, latest_data[key][1].shape[-1])], dim=1)
                     tot_data[key] = (hidden1, hidden2)
 
             #tot_data["player_div_prime"] = torch.cat([tot_data["player_div_prime"], latest_data_prime["player_div"].reshape(latest_data_size, -1)], dim=0)
@@ -164,12 +195,12 @@ def get_data(queue, arg_dict, model, tot_data):
         elif tot_data:
             for key, _ in latest_data.items():
                 if key == "player_div" or key == "ball" or key == "opp_div" or key == "skill":
-                    tot_data[key] = torch.cat([tot_data[key], latest_data[key].reshape(1, latest_data_size, -1)], dim=1)
+                    tot_data[key] = torch.cat([tot_data[key], latest_data[key].reshape(1, -1, latest_data[key].shape[-1])], dim=1)
                     tot_data[key] = tot_data[key][:, latest_data_size:, :]
                 elif key == "hidden_div":
-                    hidden1 = torch.cat([tot_data[key][0], latest_data[key][0].reshape(1, latest_data_size, -1)], dim=1)
+                    hidden1 = torch.cat([tot_data[key][0], latest_data[key][0].reshape(1, -1, latest_data[key][0].shape[-1])], dim=1)
                     hidden1 = hidden1[:, latest_data_size:, :]
-                    hidden2 = torch.cat([tot_data[key][1], latest_data[key][1].reshape(1, latest_data_size, -1)], dim=1)
+                    hidden2 = torch.cat([tot_data[key][1], latest_data[key][1].reshape(1, -1, latest_data[key][1].shape[-1])], dim=1)
                     hidden2 = hidden2[:, latest_data_size:, :]
                     tot_data[key] = (hidden1, hidden2)
                 
@@ -183,16 +214,34 @@ def get_data(queue, arg_dict, model, tot_data):
         else:
             for key, _ in latest_data.items():
                 if key == "player_div" or key == "ball" or key == "skill":
-                    tot_data[key] = latest_data[key].reshape(1, latest_data_size, -1)
+                    tot_data[key] = latest_data[key].reshape(1, -1, latest_data[key].shape[-1])
                 elif key == "hidden_div":
-                    hidden1 = latest_data[key][0].reshape(1, latest_data_size, -1)
-                    hidden2 = latest_data[key][1].reshape(1, latest_data_size, -1)
+                    hidden1 = latest_data[key][0].reshape(1, -1, latest_data[key][0].shape[-1])
+                    hidden2 = latest_data[key][1].reshape(1, -1, latest_data[key][1].shape[-1])
                     tot_data[key] = (hidden1, hidden2)
 
             
             #tot_data["player_div_prime"] = latest_data_prime["player_div"].reshape(latest_data_size, -1)
             #tot_data["opp_div_prime"] = latest_data_prime["opp_div"].reshape(latest_data_size, -1)
             #tot_data["ball_prime"] = latest_data_prime["ball"].reshape(latest_data_size, -1)
+
+        idx_def = torch.nonzero(tot_data["skill"][:,:,0]>0, as_tuple=False)[:,1]
+        idx_else = torch.nonzero(tot_data["skill"][:,:,0]<1, as_tuple=False)[:,1]
+        def_num = idx_def.shape[-1]
+        tot_num = tot_data["skill"].shape[1]
+        if def_num > tot_num // 3:
+            res_def_idx = torch.randint(0, def_num, (tot_num // 3, ))
+            idx_res_def = idx_def[res_def_idx]
+            idx_else = torch.cat([idx_else, idx_res_def], dim=0)
+        
+            for key, _ in tot_data.items():
+                if key == "player_div" or key == "ball" or key == "skill":
+                    tot_data[key] = torch.index_select(tot_data[key], 1, idx_else)
+                elif key == "hidden_div":
+                    hidden1 = torch.index_select(tot_data[key][0], 1, idx_else)
+                    hidden2 = torch.index_select(tot_data[key][1], 1, idx_else)
+                    tot_data[key] = (hidden1, hidden2)
+        
 
     return rl_data, tot_data 
 
@@ -240,6 +289,11 @@ def learner(center_div_model, center_model, queue, signal_queue, summary_queue, 
     div_model = imported_div_model.Model(arg_dict, device)
     div_model.load_state_dict(center_div_model.state_dict())
     div_model.optimizer.load_state_dict(center_div_model.optimizer.state_dict())
+
+    for state in div_model.optimizer.state.values():
+        for k, v in state.items():
+            if isinstance(v, torch.Tensor):
+                state[k] = v.cuda()
     div_model.to(device)
 
     imported_algo = importlib.import_module("algos." + arg_dict["algorithm"])
@@ -258,8 +312,10 @@ def learner(center_div_model, center_model, queue, signal_queue, summary_queue, 
     model.to(device)
     
     optimization_step = 0
+    div_step = 1
     if "optimization_step" in arg_dict:
         optimization_step = arg_dict["optimization_step"]
+        div_step = optimization_step // arg_dict["div_lr_step"] + 1
     last_saved_step = optimization_step
 
     n_game = 0
@@ -268,7 +324,6 @@ def learner(center_div_model, center_model, queue, signal_queue, summary_queue, 
 
     win_evaluation, score_evaluation = [], []
     tot_data = {}
-    div_step = 1
     
     while True:
 
@@ -281,7 +336,7 @@ def learner(center_div_model, center_model, queue, signal_queue, summary_queue, 
             div_loss_lst.append(div_loss)
             div_entropy_lst.append(div_entropy)
             center_div_model.load_state_dict(div_model.state_dict())
-            save_div_model(div_model, arg_dict, div_step)
+            #save_div_model(div_model, arg_dict, div_step)
 
             _ = signal_queue.get() 
 
@@ -308,7 +363,7 @@ def learner(center_div_model, center_model, queue, signal_queue, summary_queue, 
             if summary_queue.qsize() > arg_dict["summary_game_window"]:
                 win_evaluation, score_evaluation, last_saved_step = write_summary(writer, arg_dict, summary_queue, n_game, loss_lst, pi_loss_lst, 
                                                                  v_loss_lst, entropy_lst, move_entropy_lst, optimization_step, 
-                                                                 self_play_board, win_evaluation, score_evaluation, div_loss_lst, div_entropy_lst, model, last_saved_step)
+                                                                 self_play_board, win_evaluation, score_evaluation, div_loss_lst, div_entropy_lst, model, div_model, last_saved_step)
 
                 loss_lst, pi_loss_lst, v_loss_lst, entropy_lst, move_entropy_lst, div_loss_lst, div_entropy_lst = [], [], [], [], [], [], []
                 n_game += arg_dict["summary_game_window"]

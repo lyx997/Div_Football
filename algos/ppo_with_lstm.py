@@ -28,8 +28,8 @@ class Algo():
         for mini_batch in data:
             s, a, m, r, s_prime, done_mask, prob, need_move = mini_batch
             with torch.no_grad():
-                pi, pi_move, v, _ , _, _ = model(s)
-                pi_prime, pi_m_prime, v_prime, _, _, _= model(s_prime)
+                pi, pi_move, v, _, _, _ = model(s)
+                pi_prime, pi_m_prime, v_prime, _, _, _ = model(s_prime)
 
             td_target = r + self.gamma * v_prime * done_mask
             delta = td_target - v                           # [horizon * batch_size * 1]

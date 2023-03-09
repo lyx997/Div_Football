@@ -45,7 +45,7 @@ def copy_models(dir_src, dir_dst): # src: source, dst: destination
 def main(arg_dict):
     os.environ['OPENBLAS_NUM_THREADS'] = '1'
     cur_time = datetime.now()
-    arg_dict["log_dir"] = "logs/" + cur_time.strftime("[%m-%d]%H.%M.%S") + "_Test_div"
+    arg_dict["log_dir"] = "div_logs/" + cur_time.strftime("[%m-%d]%H.%M.%S") + "_Test_div"
     arg_dict["log_dir_policy"] = arg_dict["log_dir"] + '/policy'
     arg_dict["log_dir_div"] = arg_dict["log_dir"] + '/div'
     arg_dict["log_dir_dump"] = arg_dict["log_dir"] + '/dump'
@@ -71,18 +71,23 @@ def main(arg_dict):
     cpu_device = torch.device('cpu')
 
     center_model= model.Model(arg_dict)
+    center_div_model = div_model.Model(arg_dict)
     
     if arg_dict["trained_model_path"]:
         checkpoint = torch.load(arg_dict["trained_model_path"], cpu_device) 
         center_model.load_state_dict(checkpoint['model_state_dict'])
+    if arg_dict["trained_div_model_path"]:
+        div_checkpoint = torch.load(arg_dict["trained_div_model_path"], cpu_device) 
+        center_div_model.load_state_dict(div_checkpoint['model_state_dict'])
     
     center_model.share_memory()
+    center_div_model.share_memory()
 
     processes = [] 
 
     for i in range(arg_dict["div_num"]):
         if "env_evaluation" in arg_dict:
-            p = mp.Process(target=test, args=(center_model, i, arg_dict))
+            p = mp.Process(target=test, args=(center_div_model, center_model, i, arg_dict))
             p.start()
             processes.append(p)
         
@@ -94,10 +99,7 @@ if __name__ == '__main__':
 
     arg_dict = {
         "env": "11_vs_11_kaggle",    
-        # "11_vs_11_selfplay" : environment used for self-play training
-        # "11_vs_11_stochastic" : environment used for training against fixed opponent(rule-based AI)
-        # "11_vs_11_kaggle" : environment used for training against fixed opponent(rule-based AI hard)
-        "num_processes": 40,  # should be less than the number of cpu cores in your workstation.
+        "num_processes": 40,
         "batch_size": 32,   
         "buffer_size": 10,
         "rollout_len": 30,
@@ -113,32 +115,32 @@ if __name__ == '__main__':
 
         "summary_game_window" : 29, 
         "model_save_min_interval" : 100000,  # number of gradient updates bewteen saving model
-        "write_goal_dumps": True,
-        "write_full_episode_dumps": False,
+        "write_goal_dumps": False,
+        "write_full_episode_dumps": True,
 
-
-        "trained_model_path" : 'logs/[01-10]21.11.17_div/policy/model_15399360.tar', # use when you want to continue traning from given model.
+        "trained_model_path" : 'div_logs/[03-01]09.45.58_div/policy/model_79070400.tar', # use when you want to continue traning from given model.
+        "trained_div_model_path" : 'div_logs/[03-01]09.45.58_div/div/div_model_79070400.tar', # use when you want to continue traning from given model.
         "latest_ratio" : 0.8, # works only for self_play training. 
         "latest_n_model" : 5, # works only for self_play training. 
         "print_mode" : False,
 
         "batch_num": 3,
-        "div_num": 5,
+        "div_num": 4,
         "div_batch_size": 128,
         "div_learning_rate" : 0.001,
-        "div_lstm_size": 256,
-        "div_model": "div_model4",
+        "div_lstm_size": 64,
+        "div_model": "ball_pos_div_model2",
         "div_buffer_size": 1e6,
         "div_algorithm": "div_lr",
         "div_lr_step": 10000,
         "div_model_saved_interval": 60,
 
-        "encoder" : "encoder_div",
-        "rewarder" : "rewarder_att2",
+        "encoder" : "encoder_div4",
+        "rewarder" : "rewarder_att",
         "model" : "conv1d_div2",#add left right closest
         "algorithm" : "ppo_with_lstm",
 
-        "env_evaluation":'11_vs_11_stochastic'  # for evaluation of self-play trained agent (like validation set in Supervised Learning)
+        "env_evaluation":'11_vs_11_kaggle'  # for evaluation of self-play trained agent (like validation set in Supervised Learning)
     }
     
     main(arg_dict)

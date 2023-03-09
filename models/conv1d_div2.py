@@ -15,7 +15,7 @@ class Model(nn.Module):
             self.device = device
 
         self.arg_dict = arg_dict
-        self.div_num = arg_dict["div_num"]
+        self.div_num = 5
 
         self.fc_player = nn.Linear(arg_dict["feature_dims"]["player"],64)  
         self.fc_ball = nn.Linear(arg_dict["feature_dims"]["ball"],64)
@@ -56,7 +56,7 @@ class Model(nn.Module):
 
         self.fc_pi_z1 = nn.Linear(arg_dict["lstm_size"], 164)
         self.norm_pi_z1 = nn.LayerNorm(164)
-        self.fc_pi_z2 = nn.Linear(164, arg_dict["div_num"])
+        self.fc_pi_z2 = nn.Linear(164, 5)
 
         self.optimizer = optim.Adam(self.parameters(), lr=arg_dict["learning_rate"])
         

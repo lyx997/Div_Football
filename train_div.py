@@ -1,3 +1,4 @@
+from ast import arg
 import gfootball.env as football_env
 import time, pprint, json, os, importlib, shutil
 import numpy as np
@@ -51,8 +52,10 @@ def main(arg_dict):
         arg_dict["skill_"+str(z+1)] = arg_dict["log_dir_dump_left"] + '/skill' + str(z+1)
     
     save_args(arg_dict)
-    if arg_dict["trained_model_path"] and 'kaggle' in arg_dict['env']: 
+    if arg_dict["trained_model_path"]: 
         copy_models(os.path.dirname(arg_dict['trained_model_path']), arg_dict['log_dir_policy'])
+    if arg_dict["trained_div_model_path"]: 
+        copy_models(os.path.dirname(arg_dict['trained_div_model_path']), arg_dict['log_dir_div'])
 
     np.set_printoptions(precision=3)
     np.set_printoptions(suppress=True)
@@ -66,12 +69,29 @@ def main(arg_dict):
     model = importlib.import_module("models." + arg_dict["model"])
     div_model = importlib.import_module("models." + arg_dict["div_model"])
     cpu_device = torch.device('cpu')
+    gpu_device = torch.device('cuda:0')
 
     center_model= model.Model(arg_dict)
     center_div_model = div_model.Model(arg_dict)
-    
-    optimization_step = 0
-    div_optimization_step = 0
+
+    if arg_dict["trained_model_path"]:
+        checkpoint = torch.load(arg_dict["trained_model_path"], map_location=cpu_device)
+        optimization_step = checkpoint['optimization_step']
+        center_model.load_state_dict(checkpoint['model_state_dict'])
+        center_model.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        arg_dict["optimization_step"] = optimization_step
+        print("Trained model", arg_dict["trained_model_path"] ,"suffessfully loaded") 
+    else:
+        optimization_step = 0
+
+    if arg_dict["trained_div_model_path"]:
+        div_checkpoint = torch.load(arg_dict["trained_div_model_path"], map_location=cpu_device)
+        div_optimization_step = div_checkpoint['optimization_step']
+        center_div_model.load_state_dict(div_checkpoint['model_state_dict'])
+        center_div_model.optimizer.load_state_dict(div_checkpoint['optimizer_state_dict'])
+        print("Trained div model", arg_dict["trained_div_model_path"] ,"suffessfully loaded") 
+    else:
+        div_optimization_step = 0
 
     model_dict = {
         'optimization_step': optimization_step,
@@ -112,9 +132,12 @@ def main(arg_dict):
             p = mp.Process(target=actor, args=(rank, center_div_model, center_model, data_queue, signal_queue, summary_queue, arg_dict))
         p.start()
         processes.append(p)
-    for i in range(10):
+    #for skill_num in range(arg_dict["div_num"]-1):
+    for i in range(arg_dict["div_num"]*2):
         if "env_evaluation" in arg_dict:
-            p = mp.Process(target=evaluator, args=(center_div_model, center_model, signal_queue, summary_queue, arg_dict))
+            div_idx = i % arg_dict["div_num"]
+            #p = mp.Process(target=evaluator, args=(skill_num+1, center_div_model, center_model, signal_queue, summary_queue, arg_dict))
+            p = mp.Process(target=evaluator, args=(div_idx, center_div_model,center_model, signal_queue, summary_queue, arg_dict))
             p.start()
             processes.append(p)
         
@@ -125,49 +148,56 @@ def main(arg_dict):
 if __name__ == '__main__':
 
     arg_dict = {
-        "env": "11_vs_11_kaggle",    
+        "env": "11_vs_11_stochastic",    
         # "11_vs_11_selfplay" : environment used for self-play training
         # "11_vs_11_stochastic" : environment used for training against fixed opponent(rule-based AI)
         # "11_vs_11_kaggle" : environment used for training against fixed opponent(rule-based AI hard)
         "num_processes": 40,  # should be less than the number of cpu cores in your workstation.
         "batch_size": 32,   
         "buffer_size": 10,
-        "rollout_len": 30,
+        "rollout_len": 40,
 
         "lstm_size": 256,
         "k_epoch" : 3,
         "learning_rate" : 0.0001,
         "gamma" : 0.993,
         "lmbda" : 0.96,
-        "entropy_coef" : 0.0001,
+        "entropy_coef" : 0.001,
         "grad_clip" : 3.0,
         "eps_clip" : 0.1,
 
-        "summary_game_window" : 29, 
-        "model_save_min_interval" : 100000,  # number of gradient updates bewteen saving model
+        "summary_game_window" : 19, 
+        "model_save_min_interval" : 300000,  # number of gradient updates bewteen saving model
+        "saved_win_rate": -1,
+        "saved_eval_win_rate": 0.9,
 
-        "trained_model_path" : 'tensorboard/div/model_4781760.tar', # use when you want to continue traning from given model.
-        "latest_ratio" : 0.8, # works only for self_play training. 
-        "latest_n_model" : 5, # works only for self_play training. 
+        #"trained_model_path" : 'div_logs/[02-20]15.58.16_div/policy/model_35060160.tar', # use when you want to continue traning from given model.
+        "trained_model_path" : 'div_logs/[03-02]17.18.47_div/policy/model_41922240.tar', # use when you want to continue traning from given model.
+        #"trained_model_path" : 'div_logs/[02-03]11.13.03_div/policy/model_19616640.tar', # use when you want to continue traning from given model.
+        #"trained_div_model_path" : 'div_logs/[02-20]15.58.16_div/div/div_model_35060160.tar', # use when you want to continue traning from given model.
+        "trained_div_model_path" : '', # use when you want to continue traning from given model.
+        #"trained_div_model_path" : '', # use when you want to continue traning from given model.
+        #"trained_model_path" : '', # use when you want to continue traning from given model.
+        "latest_ratio" : 0.5, # works only for self_play training. 
+        "latest_n_model" : 10, # works only for self_play training. 
         "print_mode" : False,
 
         "batch_num": 3,
         "div_num": 5,
-        "div_batch_size": 256,
+        "div_batch_size": 128,
         "div_learning_rate" : 0.001,
-        "div_lstm_size": 128,
-        "div_model": "div_model2",
+        "div_lstm_size": 64,
+        "div_model": "ball_pos_div_model2",
         "div_buffer_size": 1e6,
         "div_algorithm": "div_lr",
         "div_lr_step": 1000,
-        "div_model_saved_interval": 60,
 
-        "encoder" : "encoder_div",
-        "rewarder" : "rewarder_att",
+        "encoder" : "encoder_div4",
+        "rewarder" : "rewarder_att19",
         "model" : "conv1d_div2",#add left right closest
         "algorithm" : "ppo_with_lstm",
 
-        "env_evaluation":'11_vs_11_kaggle'  # for evaluation of self-play trained agent (like validation set in Supervised Learning)
+        "env_evaluation":'11_vs_11_competition'  # for evaluation of self-play trained agent (like validation set in Supervised Learning)
     }
     
     main(arg_dict)

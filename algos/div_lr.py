@@ -49,7 +49,7 @@ class Algo():
 
                     div_model.optimizer.zero_grad()
                     div_loss.backward()
-                    nn.utils.clip_grad_norm_(div_model.parameters(), self.grad_clip)
+                    #nn.utils.clip_grad_norm_(div_model.parameters(), self.grad_clip)
                     div_model.optimizer.step()
 
                     div_loss_lst.append(div_loss.item())
