@@ -294,7 +294,7 @@ def test(div_model, center_model, div_idx, arg_dict):
             real_action, a, m, need_m, prob, prob_selected_a, prob_selected_m = get_max_prob_action(a_prob, m_prob)
 
             prev_obs = obs
-            obs, rew, done, info = env_left.skill_step([real_action], {skill_num : float(prob_z[skill_num])})
+            obs, rew, done, info = env_left.step([real_action])
 
             ball_owned_team = obs[0]["ball_owned_team"]
             if ball_owned_team == 0:
@@ -401,7 +401,7 @@ def evaluator(div_idx, center_div_model, center_model, signal_queue, summary_que
             real_action, a, m, need_m, prob, prob_selected_a, prob_selected_m = get_max_prob_action(a_prob, m_prob)
 
             prev_obs = obs
-            obs, rew, done, info = env_left.skill_step([real_action], {})
+            obs, rew, done, info = env_left.step([real_action])
 
             ball_owned_team = obs[0]["ball_owned_team"]
             if ball_owned_team == 0:

@@ -141,7 +141,7 @@ def actor(actor_num, div_model, center_model, data_queue, signal_queue, summary_
             if ball_owned_team != -1:
                 prev_obs = obs
 
-            obs, rew, done, info = env.skill_step(real_action, {})
+            obs, rew, done, info = env.step(real_action)
 
             ball_owned_team = obs[0]["ball_owned_team"]
             if ball_owned_team == 0:
@@ -164,7 +164,7 @@ def actor(actor_num, div_model, center_model, data_queue, signal_queue, summary_
                 prob_z, h_div_out = model_div(state_prime_dict_tensor)
                 z_most_idx = find_most_z_idx(prob_z)
 
-            fin_r = rewarder.calc_reward(rew[0], prev_obs[0], obs[0], float(prob_z[skill_num])*(arg_dict["div_num"]), None, left_owned_ball)
+            fin_r = rewarder.calc_reward(rew, prev_obs[0], obs[0], float(prob_z[skill_num])*(arg_dict["div_num"]), None, left_owned_ball)
 
             (h1_out, h2_out) = h_out
             (h1_in, h2_in) = h_in
@@ -188,7 +188,7 @@ def actor(actor_num, div_model, center_model, data_queue, signal_queue, summary_
                 skill_acc += 1
 
             steps += 1
-            score += rew[0]
+            score += rew
             tot_reward += fin_r
 
             loop_t += time.time()-init_t
@@ -334,7 +334,7 @@ def actor_self(actor_num, div_model, center_model, data_queue, signal_queue, sum
             if ball_owned_team != -1:
                 prev_obs = obs
 
-            [obs, opp_obs], [rew, _], done, info = env.skill_step([real_action, opp_real_action], {})
+            [obs, opp_obs], [rew, _], done, info = env.step([real_action, opp_real_action])
 
             ball_owned_team = obs["ball_owned_team"]
             if ball_owned_team == 0:
