@@ -12,7 +12,7 @@ from tensorboardX import SummaryWriter
 
 from actor import *
 from learner import *
-from evaluator_with_hard_att_def import evaluator
+from evaluator import evaluator
 #from evaluator import evaluator
 from datetime import datetime, timedelta
 
@@ -171,13 +171,8 @@ if __name__ == '__main__':
         "saved_win_rate": -1,
         "saved_eval_win_rate": 0.9,
 
-        #"trained_model_path" : 'div_logs/[02-20]15.58.16_div/policy/model_35060160.tar', # use when you want to continue traning from given model.
-        "trained_model_path" : 'div_logs/[03-02]17.18.47_div/policy/model_41922240.tar', # use when you want to continue traning from given model.
-        #"trained_model_path" : 'div_logs/[02-03]11.13.03_div/policy/model_19616640.tar', # use when you want to continue traning from given model.
-        #"trained_div_model_path" : 'div_logs/[02-20]15.58.16_div/div/div_model_35060160.tar', # use when you want to continue traning from given model.
+        "trained_model_path" : '', # use when you want to continue traning from given model.
         "trained_div_model_path" : '', # use when you want to continue traning from given model.
-        #"trained_div_model_path" : '', # use when you want to continue traning from given model.
-        #"trained_model_path" : '', # use when you want to continue traning from given model.
         "latest_ratio" : 0.5, # works only for self_play training. 
         "latest_n_model" : 10, # works only for self_play training. 
         "print_mode" : False,

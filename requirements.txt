@@ -1,6 +1,5 @@
-torch
-tensorboardX
-matplotlib
-kaggle-environments
-visdom==0.1.8.9
-gfootball
+gfootball==2.10.2
+numpy==1.19.2
+tensorboardX==2.2
+tensorboardX==2.6
+torch==1.6.0+cu101

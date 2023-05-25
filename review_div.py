@@ -11,7 +11,7 @@ from tensorboardX import SummaryWriter
 
 from actor import *
 from learner import *
-from evaluator_with_hard_att_def import test
+from evaluator import test
 #from evaluator import evaluator
 from datetime import datetime, timedelta
 
@@ -118,14 +118,14 @@ if __name__ == '__main__':
         "write_goal_dumps": False,
         "write_full_episode_dumps": True,
 
-        "trained_model_path" : 'div_logs/[03-01]09.45.58_div/policy/model_79070400.tar', # use when you want to continue traning from given model.
-        "trained_div_model_path" : 'div_logs/[03-01]09.45.58_div/div/div_model_79070400.tar', # use when you want to continue traning from given model.
+        "trained_model_path" : 'div_logs/[03-02]21.37.01_div/policy/model_41922240.tar', #  use when you want to continue traning from given model.
+        "trained_div_model_path" : 'div_logs/[03-02]21.37.01_div/div/div_model_42224640.tar', # use when you want to continue traning from given model.
         "latest_ratio" : 0.8, # works only for self_play training. 
         "latest_n_model" : 5, # works only for self_play training. 
         "print_mode" : False,
 
         "batch_num": 3,
-        "div_num": 4,
+        "div_num": 5,
         "div_batch_size": 128,
         "div_learning_rate" : 0.001,
         "div_lstm_size": 64,
@@ -137,7 +137,7 @@ if __name__ == '__main__':
 
         "encoder" : "encoder_div4",
         "rewarder" : "rewarder_att",
-        "model" : "conv1d_div2",#add left right closest
+        "model" : "conv1d_div2",
         "algorithm" : "ppo_with_lstm",
 
         "env_evaluation":'11_vs_11_kaggle'  # for evaluation of self-play trained agent (like validation set in Supervised Learning)
